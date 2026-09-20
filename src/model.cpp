@@ -28,7 +28,7 @@ void LinearModel::init(std::vector<std::string> dt)
     this->min_encoded = *std::min_element(this->data.encoded.begin(), this->data.encoded.end());
     this->k = dt.size() - 1;
     this->b = 0;
-    
+    this->error = 0;
 }
 
 int LinearModel::forward(std::string k)
@@ -37,5 +37,11 @@ int LinearModel::forward(std::string k)
     for(int j = 0; j < 8 && j < k.size(); ++j) x += 256^(7 - j)*k[j];
     double xn = (x - this->min_encoded)*1.0 / (this->max_encoded - this->min_encoded);
     return int(this->k * xn + b);
+}
+
+void LinearModel::adjust(double dl_dk, double dl_db, double lr)
+{
+    this->k -= dl_dk * lr;
+    this->b -= dl_db * lr;
 }
 
