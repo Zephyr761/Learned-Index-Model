@@ -1,0 +1,15 @@
+#pragma once
+#include <index_contract.h>
+
+std::unique_ptr<string_index_bench::v1::Index> make_block_plain(
+    const string_index_bench::v1::Parameters&);
+std::unique_ptr<string_index_bench::v1::Index> make_block_hash(
+    const string_index_bench::v1::Parameters&);
+std::unique_ptr<string_index_bench::v1::Index> make_block_residual(
+    const string_index_bench::v1::Parameters&);
+std::unique_ptr<string_index_bench::v1::Index> make_block_residual_delta(
+    const string_index_bench::v1::Parameters&);
+std::unique_ptr<string_index_bench::v1::Index> make_art_baseline(
+    const string_index_bench::v1::Parameters&);
+std::unique_ptr<string_index_bench::v1::Index> make_hot_baseline(
+    const string_index_bench::v1::Parameters&);

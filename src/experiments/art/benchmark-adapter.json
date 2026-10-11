@@ -1,0 +1,9 @@
+{
+  "contract": "string-index/v1",
+  "id": "art",
+  "source_dir": "../..",
+  "cmake_target": "art_baseline",
+  "factory_header": "benchmark/factories.h",
+  "factory_symbol": "make_art_baseline",
+  "source_identity": "blocklearn-prototype-v1-source-uncommitted"
+}

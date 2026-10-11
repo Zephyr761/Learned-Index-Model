@@ -1,0 +1,9 @@
+{
+  "contract": "string-index/v1",
+  "id": "hot",
+  "source_dir": "../..",
+  "cmake_target": "hot_baseline",
+  "factory_header": "benchmark/factories.h",
+  "factory_symbol": "make_hot_baseline",
+  "source_identity": "blocklearn-prototype-v1-source-uncommitted"
+}

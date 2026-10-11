@@ -19,7 +19,9 @@ public:
         this->value = value;
         this->subtree_size = 0;
     }
+    friend::TrieNode void for_each(const TrieNode& root);
 };
+
 
 int SearchResult(const std::string& key);
 
