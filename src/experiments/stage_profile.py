@@ -8,7 +8,7 @@ STAGES = {
     "leaf_model": "叶模型（公共前缀检查、编码、预测和窗口计算）",
     "tag_generate": "查询标签生成",
     "tag_filter": "基础区 SIMD/标量标签筛选",
-    "key_verify": "叶内完整 key 验证 / E1 窗口二分",
+    "key_verify": "叶内完整 key 验证",
     "delta_scan": "增量区遍历（不含完整 key 验证）",
     "exact_fallback": "目录 / 未认证叶区域的精确二分回退",
     "other": "其余控制流、ID/结果访问及部分记录器开销",

@@ -147,7 +147,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
       std::string name = argv[i];
       if (name == "--help") {
-        std::cout << "--rows SIBROW1-file [--implementation all|MODEL-ID|art|hot] (model IDs include -shortdir/-first/-shortdir-first ablations; all keeps original six) "
+        std::cout << "--rows SIBROW1-file [--implementation all|MODEL-ID|art|hot] (all runs three planner variants plus ART/HOT; cost/adaptive require BLOCKLEARN_COST_PROFILE) "
           "[--operations 100000 --repeats 3 --seed 42 --initial-fraction .8 --insert-ratio .05 --miss-ratio .1 --latency-every 1024]\n";
         return 0;
       }
@@ -185,7 +185,6 @@ int main(int argc, char** argv) {
       const auto& name = implementation.first;
       const auto factory = implementation.second;
       if (s.implementation != "all" && s.implementation != name) continue;
-      if (s.implementation == "all" && blocklearn::bench::is_model_ablation(name)) continue;
       auto emit_status = [&](const std::string& status, const std::string& reason) {
         std::cout << name << ',' << status << ",," << w.initial.size() << ',' << rows.size()
           << ',' << w.operations.size() << ',' << w.reads << ',' << w.inserts << ',' << w.miss_reads;

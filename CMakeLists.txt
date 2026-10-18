@@ -34,14 +34,14 @@ if(BUILD_TESTING)
   add_test(NAME work_planner COMMAND work_planner_test)
   find_package(Python3 COMPONENTS Interpreter QUIET)
   if(Python3_Interpreter_FOUND)
-    add_test(NAME experiment_contract COMMAND "${Python3_EXECUTABLE}"
-      "${CMAKE_CURRENT_SOURCE_DIR}/tests/experiment_contract_test.py" "$<TARGET_FILE:blocklearn_mixed>")
-    add_test(NAME profile_runner_contract COMMAND "${Python3_EXECUTABLE}"
+    add_test(NAME experiment_contract COMMAND "${Python3_EXECUTABLE}" -B
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/experiment_contract_test.py" "$<TARGET_FILE:blocklearn_mixed>" "$<TARGET_FILE:blocklearn_calibrate>")
+    add_test(NAME profile_runner_contract COMMAND "${Python3_EXECUTABLE}" -B
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/profile_runner_test.py" "$<TARGET_FILE:blocklearn_profile>" "$<TARGET_FILE:blocklearn_calibrate>")
     add_test(NAME planner_profile_contract COMMAND "${Python3_EXECUTABLE}" -B
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/planner_profile_test.py" "$<TARGET_FILE:blocklearn_calibrate>" "$<TARGET_FILE:blocklearn_mixed>")
-    add_test(NAME ablation_contract COMMAND "${Python3_EXECUTABLE}"
-      "${CMAKE_CURRENT_SOURCE_DIR}/tests/ablation_contract_test.py" "$<TARGET_FILE:blocklearn_mixed>")
+    add_test(NAME ablation_contract COMMAND "${Python3_EXECUTABLE}" -B
+      "${CMAKE_CURRENT_SOURCE_DIR}/tests/ablation_contract_test.py" "$<TARGET_FILE:blocklearn_mixed>" "$<TARGET_FILE:blocklearn_calibrate>")
     add_test(NAME linux_hot_entry_contract COMMAND "${Python3_EXECUTABLE}" -B
       "${CMAKE_CURRENT_SOURCE_DIR}/tests/linux_hot_prepare_test.py")
   endif()

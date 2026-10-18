@@ -36,11 +36,11 @@
 
 原来的三个 adapter 已移除。新的 BlockLearn 实现在 `src/learned_index.*`：多层范围模型目录、区域内块位置预测、残差感知字节标签、精确字符串验证，以及局部 delta 的同步合并重训和分裂。不依赖热门 key 缓存。
 
-四个消融版本和真实 ART/HOT 的 v1 工厂、manifest、静态/混合评测入口均在 `src`。构建和运行见 [实验说明](src/experiments/README.md)，完整机制与正确性论证见 [设计复核](src/DESIGN.md)。尚未证明在真实数据上超过 ART/HOT。
+当前保留三个规划器消融版本和真实 ART/HOT，共五个实现，v1 工厂、manifest、静态/混合评测入口均在 `src`。目录短编码固定启用，预测块优先固定启用或由自适应区域选择；已删除早期入口与独立哈希家族。构建和运行见 [实验说明](src/experiments/README.md)，完整机制与正确性论证见 [设计复核](src/DESIGN.md)。尚未证明在真实数据上超过 ART/HOT。
 
 迁移到 x86 Linux 后，先运行 `python3 -B tools/prepare_linux_hot.py` 强制验收原生 HOT，再做正式比较。环境准备、源码版本和静态/读写命令见 [Linux HOT 接口验收](docs/LINUX_HOT.md)。
 
-新增实际批次/提前返回成本规划和区域自适应标签版本，旧模型保留为对照；机制、校准约束、服务器更新清单与六版本测试命令见 [规划器 v3](docs/PLANNER_V3.md)。
+第三项消融比较两项既有优化均开启的旧目标、新工作量目标、区域自适应三个模型，再加 ART/HOT；默认或 `--ablation planner` 即执行五个版本。必要的旧目标参照仍保留，其他旧入口不再支持。机制、独立校准、服务器更新与删除清单见 [规划器 v3](docs/PLANNER_V3.md)。
 
 ## 模型方案
 

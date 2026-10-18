@@ -1,9 +1,0 @@
-{
-  "contract": "string-index/v1",
-  "id": "block-hash-first",
-  "source_dir": "../..",
-  "cmake_target": "blocklearn_adapter",
-  "factory_header": "benchmark/factories.h",
-  "factory_symbol": "make_block_hash_first",
-  "source_identity": "blocklearn-prototype-v3-source-uncommitted"
-}

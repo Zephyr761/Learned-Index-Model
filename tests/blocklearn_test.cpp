@@ -15,6 +15,17 @@ using Oracle = std::map<std::string, Value, ByteLess>;
 static void check(bool value, const char* message) {
   if (!value) throw std::runtime_error(message);
 }
+// Explicit unit weights keep semantic tests independent of host timing.
+// Real benchmark factories require the independently calibrated profile.
+static std::unique_ptr<Index> make_test_index(unsigned variant, bool small) {
+  blocklearn::Options options;
+  options.short_directory = options.predicted_first = true;
+  options.workload_planner = variant != 0;
+  options.verification = variant == 2 ? blocklearn::Verification::adaptive : blocklearn::Verification::residual;
+  if (variant) options.cost_weights = blocklearn::QueryCostWeights{};
+  if (small) { options.region_size = 64; options.directory_fanout = 4; options.delta_capacity = 4; }
+  return std::make_unique<blocklearn::LearnedIndex>(options);
+}
 static std::vector<Row> rows_of(const Oracle& oracle) {
   std::vector<Row> rows;
   for (const auto& [key, value] : oracle) rows.push_back({key, value});
@@ -59,17 +70,11 @@ int main() {
       oracle[key] = rng();
     }
     auto rows = rows_of(oracle);
-    for (Factory factory : {make_block_plain, make_block_hash, make_block_residual, make_block_residual_delta}) {
-      auto index = factory({{"region_size", "64"}, {"directory_fanout", "4"}, {"delta_capacity", "4"}});
+    for (unsigned variant : {0U, 1U, 2U}) {
+      auto index = make_test_index(variant, true);
       index->bulk_load(rows);
       audit(*index, oracle, rng);
       check(index->find(rows.front().key).has_value(), "zero value existence");
-      if (factory != make_block_residual_delta) {
-        bool threw = false;
-        try { index->insert("new", 7); } catch (const UnsupportedOperation&) { threw = true; }
-        check(threw, "static insert must throw");
-        continue;
-      }
       Oracle changed = oracle;
       for (unsigned i = 0; i < 320; ++i) {
         std::string key = i % 3 ? "https://example.org/new/" + std::to_string(i)
@@ -86,19 +91,17 @@ int main() {
       const auto s = own->statistics();
       check(s.height >= 3 && s.merges && s.leaf_splits && s.directory_splits, "structural operations not exercised");
     }
-    for (Factory factory : {make_block_plain, make_block_hash, make_block_residual, make_block_residual_delta}) {
+    for (unsigned variant : {0U, 1U, 2U}) {
       std::vector<Row> empty;
-      auto index = factory({}); index->bulk_load(empty);
+      auto index = make_test_index(variant, false); index->bulk_load(empty);
       check(!index->find("") && index->scan("", 3).empty(), "empty semantics");
-      if (factory == make_block_residual_delta) {
-        check(index->insert("", 0) == InsertResult::inserted, "empty key insert");
-        check(index->find("") == 0, "zero payload");
-        for (unsigned i = 0; i < 180; ++i) index->insert(std::to_string(i), i);
-        dynamic_cast<blocklearn::LearnedIndex*>(index.get())->validate();
-      }
+      check(index->insert("", 0) == InsertResult::inserted, "empty key insert");
+      check(index->find("") == 0, "zero payload");
+      for (unsigned i = 0; i < 180; ++i) index->insert(std::to_string(i), i);
+      dynamic_cast<blocklearn::LearnedIndex*>(index.get())->validate();
     }
     bool bad = false;
-    try { make_block_residual({{"unknown", "1"}}); } catch (const std::invalid_argument&) { bad = true; }
+    try { make_block_residual_delta_shortdir_first({{"unknown", "1"}}); } catch (const std::invalid_argument&) { bad = true; }
     check(bad, "unknown parameters accepted");
     std::cout << "blocklearn: binary keys, all ablations, misses, scans, merges, multi-level splits passed\n";
   } catch (const std::exception& e) {

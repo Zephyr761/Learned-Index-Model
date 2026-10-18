@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Four matched ablations + real ART/HOT, using the teammate's v1 contract.
+"""Three planner ablations + real ART/HOT, using the teammate's v1 contract.
 
 Static: delegate unchanged to the teammate's runner.
 Mixed: reuse its canonical dataset reader/interchange, then run our companion.
@@ -20,20 +20,19 @@ from stage_profile import profile_static
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFESTS = Path(__file__).resolve().parent
-DEFAULT_IDS = ("block-plain", "block-hash", "block-residual", "block-residual-delta", "art", "hot")
-ABLATION_SUFFIXES = {"directory": "-shortdir", "probe": "-first", "both": "-shortdir-first"}
-ABLATION_FAMILIES = ("block-hash", "block-residual-delta")
-ABLATION_IDS = tuple(name + suffix for name in ABLATION_FAMILIES for suffix in ABLATION_SUFFIXES.values())
+CONTROL_ID = "block-residual-delta-shortdir-first"
 PLANNER_IDS = ("block-residual-delta-shortdir-first-cost", "block-adaptive-delta-shortdir-first")
-IDS = DEFAULT_IDS + ABLATION_IDS + PLANNER_IDS
+MODEL_IDS = (CONTROL_ID,) + PLANNER_IDS
+DEFAULT_IDS = MODEL_IDS + ("art", "hot")
+IDS = DEFAULT_IDS
 
 
-def expand_ablations(implementations, ablation):
-    result = []
-    for name in implementations:
-        result.append(name)
-        if ablation and name in ABLATION_FAMILIES:
-            result.append(name + ABLATION_SUFFIXES[ablation])
+def select_implementations(implementations, ablation):
+    if ablation and implementations:
+        raise ValueError("--ablation planner fixes all five implementations; omit --implementation")
+    result = list(implementations) if implementations is not None else list(DEFAULT_IDS)
+    if len(set(result)) != len(result):
+        raise ValueError("duplicate implementation")
     return result
 
 
@@ -89,8 +88,8 @@ def main():
     parser.add_argument("--benchmark", type=Path, default=ROOT / "benchmark/learned-index")
     parser.add_argument("--mode", choices=("static", "mixed", "both"), default="static")
     parser.add_argument("--implementation", action="append", choices=IDS)
-    parser.add_argument("--ablation", choices=tuple(ABLATION_SUFFIXES),
-                        help="pair selected block-hash / block-residual-delta controls with directory-only, probe-only, or combined variants")
+    parser.add_argument("--ablation", choices=("planner",),
+                        help="run the fixed five-way planner comparison (also the default); incompatible with --implementation")
     parser.add_argument("--operations", type=positive, default=1000000)
     parser.add_argument("--repeats", type=positive, default=3)
     parser.add_argument("--seed", type=int, default=42)
@@ -115,15 +114,10 @@ def main():
     benchmark = args.benchmark.resolve()
     if not (benchmark / "scripts/benchmark.py").is_file():
         parser.error("--benchmark is not the teammate's repository")
-    implementations = args.implementation or list(DEFAULT_IDS)
-    if len(set(implementations)) != len(implementations):
-        parser.error("duplicate implementation")
-    if args.ablation:
-        if any(name in ABLATION_IDS + PLANNER_IDS for name in implementations):
-            parser.error("--ablation selects variants automatically; select base implementation IDs")
-        if not any(name in ABLATION_FAMILIES for name in implementations):
-            parser.error("--ablation requires selecting block-hash or block-residual-delta")
-        implementations = expand_ablations(implementations, args.ablation)
+    try:
+        implementations = select_implementations(args.implementation, args.ablation)
+    except ValueError as error:
+        parser.error(str(error))
     if args.require_hot and "hot" not in implementations:
         parser.error("--require-hot requires selecting hot")
     needs_planner = any(name in PLANNER_IDS for name in implementations)
@@ -154,8 +148,8 @@ def main():
             "adaptive_tags_and_order": name.startswith("block-adaptive-")} for name in implementations if name.startswith("block-")},
         "limitations": ["No automatic CPU pinning or prewarm; control the test environment.",
                         "Reported owned memory is an estimate, not peak RSS.",
-                        "E3 and E4 have identical static lookup paths before inserts.",
-                        "Planning is shared by E1/E2/E3/E4 for controlled ablations.",
+                        "Short-directory is enabled for all model variants; predicted-first is fixed in control/cost, selectable per region in adaptive.",
+                        "Control-to-cost isolates the new planner package; cost-to-adaptive jointly evaluates tag-kind and scan-order selection.",
                         "No speedup or novelty is inferred from functional smoke tests."],
     }
     (output / "suite.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
@@ -255,7 +249,9 @@ def main():
             lines.append("- {}: {} — {}".format(name, item["status"], item["notes"]))
         lines += ["", "Static results: static/report.md (only available implementations).",
                   "Mixed results: mixed-summary.csv. Full provenance: suite.json.", "",
-                  "E3/E4 static paths are identical; this is not proof of speedup or novelty."]
+                  "Five-way planner ablation: legacy objective, calibrated work objective, adaptive tags/order, ART, HOT.",
+                  "Adaptive permits hash tags inside regions; the standalone block-hash baseline has been retired.",
+                  "Functional smoke tests are not proof of speedup or novelty."]
         if "stage_profile" in metadata:
             lines += ["", "Separate diagnostic stages: stage-profile.md / stage-profile.csv (instrumented times, NOT throughput)."]
         (output / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

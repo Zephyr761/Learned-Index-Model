@@ -13,7 +13,7 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src/experiments"))
 from stage_profile import file_sha256, profile_static
-from run_experiments import ABLATION_IDS, PLANNER_IDS
+from run_experiments import MODEL_IDS, CONTROL_ID
 
 
 def main():
@@ -47,7 +47,7 @@ def main():
         write_queries(workload)
         positions = [i * len(workload) // 13 for i in range(13)]
         checksum = sum(workload[i][2] + workload[i][1] for i in positions) % (1 << 64)
-        for name in ("block-plain", "block-hash", "block-residual", "block-residual-delta") + ABLATION_IDS + PLANNER_IDS:
+        for name in MODEL_IDS:
             result = invoke(name)
             assert all(None not in row and all(v is not None for v in row.values()) for row in result)
             for repeat in ("0", "1"):
@@ -65,12 +65,12 @@ def main():
                 assert next(r for r in stages if r["stage"] == "delta_scan")["scope_calls"] == "0"
                 assert all(r["full_key_comparisons"] == "" for r in result if r["outcome"] != "all")
                 assert all(int(r["checksum"]) == 0 for r in result if r["outcome"] == "miss")
-        result = invoke("block-residual", 1000)
+        result = invoke(CONTROL_ID, 1000)
         assert all(int(r["sampled_queries"]) == len(workload) for r in result if r["outcome"] == "all")
         write_queries([(b"a", True, 1)] * 3)
-        assert {r["outcome"] for r in invoke("block-residual")} == {"all", "hit"}
+        assert {r["outcome"] for r in invoke(CONTROL_ID)} == {"all", "hit"}
         write_queries([(b"missing", False, 0)] * 3)
-        assert {r["outcome"] for r in invoke("block-residual")} == {"all", "miss"}
+        assert {r["outcome"] for r in invoke(CONTROL_ID)} == {"all", "miss"}
         # Exercise the actual Python integration/report writer with real C++
         # output, without rebuilding a suite inside every unit test.
         write_queries(workload)
@@ -78,7 +78,7 @@ def main():
         interchange.mkdir(parents=True)
         shutil.copyfile(rows, interchange / "rows.bin")
         shutil.copyfile(queries, interchange / "queries.bin")
-        metadata = {"implementations": ["block-plain", "block-residual", "art"]}
+        metadata = {"implementations": list(MODEL_IDS) + ["art"]}
         report = {"dataset": {"rows_sha256": file_sha256(rows)},
                   "workload": {"queries_sha256": file_sha256(queries)},
                   "results": [{"implementation_id": name, "status": "passed"} for name in metadata["implementations"]]}
@@ -90,9 +90,9 @@ def main():
             return result.stdout
 
         args = SimpleNamespace(timeout=30, profile_samples=13, repeats=2)
-        profile_static(args, folder, Path(binary).resolve().parents[1], os.environ.copy(), metadata, report, run)
+        profile_static(args, folder, Path(binary).resolve().parents[1], environment, metadata, report, run)
         combined = list(csv.DictReader(io.StringIO((folder / "stage-profile.csv").read_text())))
-        assert {r["implementation"] for r in combined} == {"block-plain", "block-residual"}
+        assert {r["implementation"] for r in combined} == set(MODEL_IDS)
         assert metadata["stage_profile"]["queries_sha256"] == file_sha256(queries)
         assert metadata["stage_profile"]["skipped"][0]["implementation"] == "art"
         assert "不是正式吞吐量" in (folder / "stage-profile.md").read_text()
@@ -108,16 +108,16 @@ def main():
             stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         assert mode.returncode == 2 and not rejected.exists()
         invoke("art", ok=False)  # no fabricated baseline stages
-        invoke("block-residual", 0, ok=False)
-        invoke("block-residual", -1, ok=False)
+        invoke(CONTROL_ID, 0, ok=False)
+        invoke(CONTROL_ID, -1, ok=False)
         write_queries([(b"a", True, 99)])
-        invoke("block-residual", ok=False)  # oracle/answer mismatch
+        invoke(CONTROL_ID, ok=False)  # oracle/answer mismatch
         write_queries(workload)
         valid = queries.read_bytes()
         for bad in (valid[:-1], valid + b"extra", b"INVALID!" + valid[8:],
                     valid[:16] + b"\x02" + valid[17:], valid[:25] + struct.pack("<Q", (1 << 64) - 1) + valid[33:]):
             queries.write_bytes(bad)
-            invoke("block-residual", ok=False)
+            invoke(CONTROL_ID, ok=False)
     print("profile frozen sample/checksum, hit/miss splits, time conservation and malformed input checks passed")
 
 

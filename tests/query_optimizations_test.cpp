@@ -168,11 +168,11 @@ int main() {
       check(index->descriptor().implementation == model.id, "variant identity lost optimization flags");
     }
     bool rejected = false;
-    try { make_block_hash_shortdir({{"short_directory", "0"}}); }
+    try { make_block_residual_delta_shortdir_first({{"short_directory", "0"}}); }
     catch (const std::invalid_argument&) { rejected = true; }
     check(rejected, "fixed ablation flags silently overridden");
     rejected = false;
-    try { make_block_hash({{"predicted_first", "2"}}); }
+    try { make_block_residual_delta_shortdir_first({{"predicted_first", "2"}}); }
     catch (const std::invalid_argument&) { rejected = true; }
     check(rejected, "invalid optimization parameter accepted");
     std::cout << "short-code collisions/EOS/extremes, all switch combinations, inserts/splits, exhaustive misses and probe savings passed\n";

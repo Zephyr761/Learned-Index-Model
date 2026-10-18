@@ -89,9 +89,9 @@ CC=gcc CXX=g++ python3 -B src/experiments/run_experiments.py \
   --memory-budget-mib 8192 --timeout 7200
 ```
 
-`-shortdir-first` 是两项同时开启的配置，并非预先认定的最快配置；也可按 Mac 消融结果选择仅 `-shortdir`、仅 `-first` 或原模型。每次输出目录改名，不能覆盖旧报告。HOT 不会自动加入只选择 ART 的旧命令，必须明确选择 `--implementation hot --require-hot`。
+`-shortdir-first` 是两项已接受优化同时开启、采用原规划目标的参照。仅 `-shortdir`、仅 `-first` 和更早入口已移除；上面的三实现命令只用于原规划参照与基线比较。每次输出目录改名，不能覆盖旧报告。显式选择子集时 HOT 不会自动加入，需明确选择 `--implementation hot --require-hot`。
 
-若要在 Linux 重做三组消融，公共参数选择 `block-residual-delta`、`art`、`hot`，增加 `--require-hot`，继续使用 `--ablation directory / probe / both`；每组是完整模型对照、当前优化版、ART、HOT，不再额外加入哈希家族。
+第三项消融去掉三条 `--implementation`，使用 `--ablation planner --require-hot`，一次跑原规划目标、新工作量目标、区域自适应及 ART/HOT 共五个实现。旧 `--ablation directory / probe / both` 已拒绝；命令和独立校准说明见 [规划器 v3](PLANNER_V3.md)。
 
 看 `static/report.md` 的正式吞吐与延迟。需要模型阶段诊断时另加 `--profile-stages --profile-samples 100000`；HOT/ART 源码不插桩，不提供伪造的内部阶段时间。
 
@@ -108,7 +108,7 @@ CC=gcc CXX=g++ python3 -B src/experiments/run_experiments.py \
   --memory-budget-mib 8192 --timeout 7200
 ```
 
-`mixed-summary.csv` 提供读写吞吐和独立延迟轮的插入 P50/P99，模型同步合并/重训计入插入成本。不启用纯静态哈希家族。内存预算不是进程 RSS 硬上限，按机器 RAM 留余量；换页、仿真或负载竞争下的结果不作为原生性能排名。
+`mixed-summary.csv` 提供读写吞吐和独立延迟轮的插入 P50/P99，模型同步合并/重训计入插入成本。第三项读写消融同样去掉三条显式实现，使用 `--ablation planner`，五个实现均支持插入。内存预算不是进程 RSS 硬上限，按机器 RAM 留余量；换页、仿真或负载竞争下的结果不作为原生性能排名。
 
 ## 6. HOT 接口语义与限制
 

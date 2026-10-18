@@ -186,7 +186,7 @@ model_cost = 0.2 × 编码字节数
 
 若候选均未通过，代码使用块大小 32、编码长度 7 和完整分段预算保留一次最终拟合结果，再由构建或维护流程根据认证状态决定分裂或精确查询。
 
-原四个索引版本及其目录/预测块开关变体共用这套规划逻辑，对应 `legacy_planning_cost`，继续作为对照；新增的成本规划和自适应标签版本使用下文的实际工作量目标，不混淆两套规划器。
+这套逻辑对应 `legacy_planning_cost`，仅通过两项已接受优化均开启的 `block-residual-delta-shortdir-first` 保留为第三项消融参照；早期四个独立工厂和单项开关变体已删除。另两个工厂使用下文的实际工作量目标，不混淆两套规划器。
 
 ### 4.3 实际查询工作量规划
 
@@ -407,38 +407,19 @@ delta 达到阈值后，同步执行局部维护：
 | `cost_weights` | 未提供 | C++ 可显式给出测试/配置权重；否则新规划器在 bulk-load 加载冻结校准文件 |
 | `allow_insert` | true | 是否开放在线插入 |
 
-工厂接受 `region_size` 到 `predicted_first` 的数值参数，布尔值使用 0/1，检查重复参数、数值格式和范围；验证方式、插入能力及新规划开关由工厂决定，成本系数通过独立校准文件加载。`verification=adaptive` 只用于开启新规划器的配置。
+工厂接受区域大小、目录扇出、delta 容量、分段/误差预算、标签特征上限及 `instrument` 参数，检查重复、格式和范围。三种工厂均固定启用短目录；`predicted_first` 固定为开启或允许区域选择，不接受通过参数覆盖两项已接受的优化。验证方式、插入能力及规划开关由工厂决定，成本系数通过独立校准文件加载。直接 C++ `Options` 仍可配置查询原语，用于内部正确性测试，不代表保留早期 benchmark 入口。
 
-### 9.2 四个工厂配置
-
-| 实现 ID | 候选验证方式 | 在线插入 |
-| --- | --- | --- |
-| `block-plain` | 模型窗口内完整 key 二分，不保存基础标签数组 | 不开放 |
-| `block-hash` | 对公共前缀后的完整后缀计算 FNV-1a 并混合长度、折叠为 16-bit 标签，再精确验证 | 不开放 |
-| `block-residual` | 学习少量字节位置生成 16-bit 标签，再精确验证 | 不开放 |
-| `block-residual-delta` | 相同残差标签查询路径，加局部 delta 和动态结构维护 | 开放 |
-
-四个工厂都实例化 `LearnedIndex`。它们共用训练规划；`block-plain` 不保留规划得到的基础标签，`block-hash` 在最终验证时使用普通哈希。未写入数据时，两个 residual 配置的静态查询路径相同。
-
-`block-hash` 和 `block-residual-delta` 各另有三个固定开关工厂：
-
-| ID 后缀 | `short_directory` | `predicted_first` |
-| --- | --- | --- |
-| 无后缀（原对照） | false | false |
-| `-shortdir` | true | false |
-| `-first` | false | true |
-| `-shortdir-first` | true | true |
-
-例如 `block-residual-delta-shortdir-first` 同时启用两项优化并保留动态插入。固定开关工厂拒绝再次传入这两个参数，防止实现 ID 与实际配置不符。原四个工厂默认关闭新开关，继续作为同源码版本的对照。
-
-### 9.3 新目标与区域自适应工厂
+### 9.2 当前三个工厂与第三项消融
 
 | 实现 ID | 规划与标签 | 扫描策略 |
 | --- | --- | --- |
+| `block-residual-delta-shortdir-first` | 原规划目标、残差标签，保留作参照 | 固定预测块优先 |
 | `block-residual-delta-shortdir-first-cost` | 校准工作量规划，只允许残差标签 | 固定预测块优先 |
 | `block-adaptive-delta-shortdir-first` | 校准工作量规划，每区域选择哈希/残差标签 | 每区域选择左到右/预测块优先 |
 
-两者均启用目录短键、支持在线插入，共用原有区域边界、分裂阈值和精确性约束。`block-residual-delta-shortdir-first` 是两项既有优化开启、但使用旧规划器的对照；新工厂不改变旧命令的实现选择。自适应区域边界不在本次实现范围。
+三者均启用目录短键、支持在线插入，共用原有区域边界、分裂阈值和精确性约束。第一项到第二项评价整个新规划器包；第二项到第三项评价标签种类和扫描顺序的联合选择，不单独归因于某个开关。独立哈希家族和其他早期入口/manifest 已移除；哈希标签原语仍是自适应模型的区域候选。自适应区域边界不在本次实现范围。
+
+统一实验入口和 mixed runner 的 `all` 默认执行三个模型及 ART/HOT，共五个实现。`--ablation planner` 显式选择同一矩阵；旧目录/预测块单项消融命令会拒绝，不兼容映射为新实验。
 
 ## 10. 内存统计与可观测性
 
@@ -475,7 +456,7 @@ delta 达到阈值后，同步执行局部维护：
 | `tag_probe.h` | `tag_mask`：NEON / AVX2 / 标量候选批量筛选 |
 | `learned_index.h/.cpp` | `LearnedIndex / Node`：存储组织、构建、路由、查询、插入维护和有序接口 |
 | `lookup_profile.h` | 空记录器、计时记录器和独占阶段累计 |
-| `benchmark/model_factories.cpp`、`benchmark/model_registry.h` | 四个原工厂、六个开关变体、两个新规划器工厂的统一注册 |
+| `benchmark/model_factories.cpp`、`benchmark/model_registry.h` | 原目标、新目标、区域自适应三个当前工厂的统一注册 |
 | `benchmark/calibrate_planner.cpp` | 独立合成原语校准，可验证已有配置，不读取正式负载 |
 | `benchmark/contract/index_contract.h` | `Row / Index / Descriptor` 等统一接口定义 |
 | `benchmark/art_baseline.cpp`、`benchmark/hot_baseline.cpp` | 独立基线库的接口适配，不参与 BlockLearn 的内部路由或存储 |
