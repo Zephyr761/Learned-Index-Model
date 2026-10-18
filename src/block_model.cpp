@@ -4,6 +4,7 @@
 #include <cmath>
 #include <stdexcept>
 #include "key_bytes.h"
+#include "query_cost.h"
 
 namespace blocklearn {
 
@@ -60,14 +61,17 @@ BlockModel BlockModel::fit(const std::vector<std::string_view>& keys,
   m.certified_ = std::all_of(m.segments_.begin(), m.segments_.end(),
       [max_error](const Segment& s) { return s.radius <= max_error; });
   // Certify the actual lookup path, not just the segment used during fitting.
-  double total = 0;
+  double total = 0, batches = 0;
   for (std::size_t i = 0; i < keys.size(); ++i) {
     auto w = m.window(keys[i]);
     if (i / block_size < w.first || i / block_size >= w.last)
       m.certified_ = false;
     total += w.last - w.first;
+    const auto records = std::min(keys.size(), w.last * block_size) - w.first * block_size;
+    batches += (records + 15) / 16;
   }
   m.average_blocks_ = total / keys.size();
+  m.average_tag_batches_ = batches / keys.size();
   return m;
 }
 bool BlockModel::accepts_prefix(std::string_view key) const {
@@ -87,10 +91,17 @@ BlockPrediction BlockModel::locate(std::string_view key) const {
 std::size_t BlockModel::owned_bytes() const {
   return segments_.capacity() * sizeof(Segment);
 }
-double BlockModel::planning_cost(std::size_t count) const {
+double BlockModel::legacy_planning_cost(std::size_t count) const {
   // Explicit, portable cost proxy; these coefficients are not measured ns.
   return 0.2 * bytes_ + average_blocks_ +
       double(owned_bytes()) / std::max<std::size_t>(count, 1) * 0.08;
+}
+double BlockModel::planning_cost(std::size_t count, const QueryCostWeights& weights,
+                                  double visited_batches) const {
+  const auto steps = std::ceil(std::log2(double(segments_.size()) + 1));
+  return bytes_ * weights.encode_byte + steps * weights.segment_step
+      + visited_batches * weights.tag_batch
+      + double(owned_bytes()) / std::max<std::size_t>(count, 1) * weights.space_byte;
 }
 
 }  // namespace blocklearn

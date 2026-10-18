@@ -76,7 +76,7 @@ int main(int argc, char** argv) {
     index->bulk_load(rows);
     auto& own = dynamic_cast<LearnedIndex&>(*index);
     const auto timer = calibrate_clock();
-    std::cout << "implementation,status,repeat,outcome,source_operations,sampled_queries,stage,total_ns,ns_per_query,percent_of_profiled_total,scope_calls,calls_per_query,clock_pair_median_ns,clock_pair_p90_ns,clock_pair_zero_fraction,checksum,full_key_comparisons,tag_tests,directory_fallbacks\n";
+    std::cout << "implementation,status,repeat,outcome,source_operations,sampled_queries,stage,total_ns,ns_per_query,percent_of_profiled_total,scope_calls,calls_per_query,clock_pair_median_ns,clock_pair_p90_ns,clock_pair_zero_fraction,checksum,full_key_comparisons,tag_tests,directory_fallbacks,tag_batches,hash_leaves,residual_leaves,predicted_first_leaves\n";
     for (std::size_t repeat = 0; repeat < repeats; ++repeat) {
       std::array<LookupProfile, 2> groups;
       std::array<Value, 2> checksums{};
@@ -101,8 +101,10 @@ int main(int argc, char** argv) {
           if (std::string_view(outcome) == "all") {
             std::cout << after.full_key_comparisons - before.full_key_comparisons << ','
                 << after.tag_tests - before.tag_tests << ','
-                << after.directory_fallbacks - before.directory_fallbacks;
-          } else std::cout << ",,";
+                << after.directory_fallbacks - before.directory_fallbacks << ','
+                << after.tag_batches - before.tag_batches << ',' << after.hash_leaves << ','
+                << after.residual_leaves << ',' << after.predicted_first_leaves;
+          } else std::cout << ",,,,,,";
           std::cout << '\n';
         };
         line("profiled_total", profile.total_ns, profile.queries);

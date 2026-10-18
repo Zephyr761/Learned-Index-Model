@@ -11,6 +11,8 @@
 
 四个模型共享同一结构规划，避免把区域大小或训练预算差异误认为标签收益。E3/E4 静态路径相同；E4 的意义主要在混合读写实验。
 
+第三项优化另有 `block-residual-delta-shortdir-first-cost`（新目标、固定残差标签）和 `block-adaptive-delta-shortdir-first`（新目标、区域自选标签/顺序）。旧 ID 继续作为原规划器对照；不要认为更新源码就自动选中了新版本。新入口在读取数据/查询之前自动做独立合成原语校准、冻结系数，也可用 `--planner-costs FILE` 复用同目标、同构建类型的独立配置。详细机制、Linux 六版本命令和服务器更新文件清单见 [规划器 v3](../../docs/PLANNER_V3.md)。
+
 ## 目录短编码 / 预测块优先：三组开关消融
 
 `block-hash` 和 `block-residual-delta` 各支持三个固定配置后缀：

@@ -6,6 +6,7 @@
 #include <vector>
 
 namespace blocklearn {
+struct QueryCostWeights;
 
 struct BlockWindow {
   std::size_t first = 0;  // inclusive block index
@@ -36,7 +37,11 @@ class BlockModel {
   std::size_t segment_count() const { return segments_.size(); }
   std::size_t owned_bytes() const;
   double average_blocks() const { return average_blocks_; }
-  double planning_cost(std::size_t count) const;
+  double average_tag_batches() const { return average_tag_batches_; }
+  // The original controls retain their original objective explicitly.
+  double legacy_planning_cost(std::size_t count) const;
+  double planning_cost(std::size_t count, const QueryCostWeights&,
+                       double visited_batches) const;
   const std::vector<Segment>& segments() const { return segments_; }
 
  private:
@@ -48,6 +53,7 @@ class BlockModel {
   unsigned bytes_ = 2;
   bool certified_ = false;
   double average_blocks_ = 0;
+  double average_tag_batches_ = 0;
 };
 
 }  // namespace blocklearn

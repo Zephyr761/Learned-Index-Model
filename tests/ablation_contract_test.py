@@ -10,7 +10,7 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src/experiments"))
-from run_experiments import ABLATION_FAMILIES, ABLATION_IDS, ABLATION_SUFFIXES, expand_ablations
+from run_experiments import ABLATION_FAMILIES, ABLATION_IDS, ABLATION_SUFFIXES, PLANNER_IDS, IDS, expand_ablations
 
 
 def main():
@@ -21,14 +21,14 @@ def main():
             "block-hash", "block-hash" + suffix,
             "block-residual-delta", "block-residual-delta" + suffix, "art"]
     assert expand_ablations(selected, None) == selected
-    for name in ABLATION_IDS:
+    for name in ABLATION_IDS + PLANNER_IDS:
         manifest = json.loads((ROOT / "src/experiments" / name / "benchmark-adapter.json").read_text())
         assert manifest["id"] == name
         assert manifest["factory_symbol"] == "make_" + name.replace("-", "_")
         assert (ROOT / "src/experiments" / name / manifest["source_dir"]).resolve() == ROOT / "src"
     described = subprocess.check_output([binary, "--describe"], text=True)
     availability = {r["implementation"]: r for r in csv.DictReader(io.StringIO(described))}
-    assert len(availability) == 12
+    assert len(availability) == len(IDS)
     assert all(availability[name]["status"] == "available" for name in ABLATION_IDS)
     with tempfile.TemporaryDirectory(prefix="blocklearn-ablation-") as folder:
         folder = Path(folder)

@@ -8,16 +8,19 @@
 #include "residual_tags.h"
 #include "lookup_profile.h"
 #include "short_directory.h"
+#include "region_planner.h"
 
 namespace blocklearn {
 
-enum class Verification { full_key, hash, residual };
+enum class Verification { full_key, hash, residual, adaptive };
 struct Options {
   Verification verification = Verification::residual;
   bool allow_insert = true;
   bool instrument = false;
   bool short_directory = false;
   bool predicted_first = false;
+  bool workload_planner = false;
+  std::optional<QueryCostWeights> cost_weights;  // null => frozen calibration file
   std::size_t region_size = 1024;
   std::size_t directory_fanout = 64;
   std::size_t delta_capacity = 16;
@@ -26,10 +29,11 @@ struct Options {
   unsigned tag_features = 2;
 };
 struct Statistics {
-  std::uint64_t queries = 0, full_key_comparisons = 0, tag_tests = 0;
+  std::uint64_t queries = 0, full_key_comparisons = 0, tag_tests = 0, tag_batches = 0;
   std::uint64_t directory_fallbacks = 0, merges = 0, leaf_splits = 0;
   std::uint64_t directory_splits = 0, regions_trained = 0;
   std::size_t leaves = 0, directory_nodes = 0, height = 0, delta_rows = 0;
+  std::size_t hash_leaves = 0, residual_leaves = 0, predicted_first_leaves = 0;
 };
 
 template<class T> struct CacheAlignedAllocator {
@@ -80,6 +84,9 @@ class LearnedIndex final : public string_index_bench::v1::Index {
     ShortDirectory short_keys;
     BlockModel model;
     TagPlan tag_plan;
+    TagKind tag_kind = TagKind::residual;
+    bool predicted_first = false;
+    double planning_cost = 0;
     std::size_t merges_since_features = 0;
     Node* next = nullptr;
   };
@@ -95,6 +102,7 @@ class LearnedIndex final : public string_index_bench::v1::Index {
   std::string_view first_key(const Node&) const;
   std::uint16_t tag(const Node&, std::string_view) const;
   void train_leaf(Node&, bool reuse_features = false);
+  void train_work_leaf(Node&, const std::vector<std::string_view>&, bool reuse);
   void train_directory(Node&);
   void bulk_leaves(std::vector<Id>, std::vector<std::unique_ptr<Node>>&);
   std::size_t child_position(const Node&, std::string_view) const;

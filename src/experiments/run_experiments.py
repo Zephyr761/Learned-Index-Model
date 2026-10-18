@@ -24,7 +24,8 @@ DEFAULT_IDS = ("block-plain", "block-hash", "block-residual", "block-residual-de
 ABLATION_SUFFIXES = {"directory": "-shortdir", "probe": "-first", "both": "-shortdir-first"}
 ABLATION_FAMILIES = ("block-hash", "block-residual-delta")
 ABLATION_IDS = tuple(name + suffix for name in ABLATION_FAMILIES for suffix in ABLATION_SUFFIXES.values())
-IDS = DEFAULT_IDS + ABLATION_IDS
+PLANNER_IDS = ("block-residual-delta-shortdir-first-cost", "block-adaptive-delta-shortdir-first")
+IDS = DEFAULT_IDS + ABLATION_IDS + PLANNER_IDS
 
 
 def expand_ablations(implementations, ablation):
@@ -104,6 +105,7 @@ def main():
     parser.add_argument("--timeout", type=positive, default=1800)
     parser.add_argument("--jobs", type=int, choices=(1, 2, 3, 4), default=2)
     parser.add_argument("--cmake", type=Path, help="optional absolute path to cmake")
+    parser.add_argument("--planner-costs", type=Path, help="reuse an independent synthetic cost profile; otherwise new planner variants calibrate before dataset/query loading")
     parser.add_argument("--require-hot", action="store_true", help="fail instead of claiming a complete ART/HOT comparison without native HOT")
     args = parser.parse_args()
     if args.seed < 0 or args.seed > (1 << 64) - 1 or args.initial_fraction == 0:
@@ -117,13 +119,16 @@ def main():
     if len(set(implementations)) != len(implementations):
         parser.error("duplicate implementation")
     if args.ablation:
-        if any(name in ABLATION_IDS for name in implementations):
+        if any(name in ABLATION_IDS + PLANNER_IDS for name in implementations):
             parser.error("--ablation selects variants automatically; select base implementation IDs")
         if not any(name in ABLATION_FAMILIES for name in implementations):
             parser.error("--ablation requires selecting block-hash or block-residual-delta")
         implementations = expand_ablations(implementations, args.ablation)
     if args.require_hot and "hot" not in implementations:
         parser.error("--require-hot requires selecting hot")
+    needs_planner = any(name in PLANNER_IDS for name in implementations)
+    if args.planner_costs and (not needs_planner or not args.planner_costs.is_file()):
+        parser.error("--planner-costs requires a readable file and a cost/adaptive implementation")
     env = os.environ.copy()
     if args.cmake:
         cmake = args.cmake.resolve()
@@ -144,7 +149,9 @@ def main():
         "hot_revision": git_revision(ROOT / "related_works/hot"),
         "implementations": implementations, "arguments": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
         "optimization_variants": {name: {"short_directory": "-shortdir" in name,
-            "predicted_first": name.endswith("-first")} for name in implementations if name.startswith("block-")},
+            "predicted_first": "-first" in name,
+            "planner": "calibrated-work" if name in PLANNER_IDS else "legacy",
+            "adaptive_tags_and_order": name.startswith("block-adaptive-")} for name in implementations if name.startswith("block-")},
         "limitations": ["No automatic CPU pinning or prewarm; control the test environment.",
                         "Reported owned memory is an estimate, not peak RSS.",
                         "E3 and E4 have identical static lookup paths before inserts.",
@@ -159,8 +166,21 @@ def main():
             configure.append("-DBLOCKLEARN_REQUIRE_HOT=ON")
         run(configure, env, args.timeout, output / "configure.log")
         targets = ["blocklearn_mixed"] + (["blocklearn_profile"] if args.profile_stages else [])
+        if needs_planner:
+            targets.append("blocklearn_calibrate")
         run([cmake, "--build", build, "--target", *targets, "-j", args.jobs],
             env, args.timeout, output / "build.log")
+        if needs_planner:
+            profile = output / "planner-costs.txt"
+            calibrator = build / "src/blocklearn_calibrate"
+            if args.planner_costs:
+                shutil.copyfile(args.planner_costs.resolve(), profile)
+                run([calibrator, "--validate", profile], env, args.timeout, output / "calibration.log")
+            else:
+                run([calibrator, "--output", profile], env, args.timeout, output / "calibration.log")
+            env["BLOCKLEARN_COST_PROFILE"] = str(profile)
+            metadata["planner_cost_profile"] = {"path": str(profile), "sha256": hashlib.sha256(profile.read_bytes()).hexdigest(),
+                "origin": "independent-synthetic-v1", "policy": "frozen before dataset/query loading; never tuned to formal workload; fixed 90/10 planning prior"}
         description = run([build / "src/blocklearn_mixed", "--describe"], env, args.timeout,
                           output / "availability.csv")
         availability = {row["implementation"]: row for row in csv.DictReader(io.StringIO(description))}
@@ -217,6 +237,8 @@ def main():
                     writer.writerows(results)
         if source_identity() != metadata["source_sha256"]:
             raise RuntimeError("model/adapter/experiment source changed during the run; results are not a frozen comparison")
+        if needs_planner and hashlib.sha256((output / "planner-costs.txt").read_bytes()).hexdigest() != metadata["planner_cost_profile"]["sha256"]:
+            raise RuntimeError("planner cost profile changed during the run")
         partial = bool(metadata["static_unsupported"]) or any(r["status"] == "unsupported" for r in metadata.get("static_statuses", []))
         partial = partial or any(r["status"] == "unsupported" for r in metadata.get("mixed_results", []))
         metadata["status"] = "completed_with_unsupported" if partial else "completed"

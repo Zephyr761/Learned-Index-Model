@@ -28,6 +28,24 @@ blocklearn::Options parse(const string_index_bench::v1::Parameters& params,
   }
   return o;
 }
+std::unique_ptr<string_index_bench::v1::Index> make_cost_residual(
+    const string_index_bench::v1::Parameters& p) {
+  auto options = parse(p, blocklearn::Verification::residual, true);
+  for (const auto& parameter : p)
+    if (parameter.first == "short_directory" || parameter.first == "predicted_first")
+      throw std::invalid_argument("cost ablation fixes optimization switches");
+  options.short_directory = options.predicted_first = options.workload_planner = true;
+  return std::make_unique<blocklearn::LearnedIndex>(options);
+}
+std::unique_ptr<string_index_bench::v1::Index> make_adaptive(
+    const string_index_bench::v1::Parameters& p) {
+  auto options = parse(p, blocklearn::Verification::adaptive, true);
+  for (const auto& parameter : p)
+    if (parameter.first == "short_directory" || parameter.first == "predicted_first")
+      throw std::invalid_argument("adaptive ablation fixes optimization switches");
+  options.short_directory = options.predicted_first = options.workload_planner = true;
+  return std::make_unique<blocklearn::LearnedIndex>(options);
+}
 std::unique_ptr<string_index_bench::v1::Index> variant(
     const string_index_bench::v1::Parameters& params,
     blocklearn::Verification verification, bool insert, bool shortdir, bool first) {
@@ -79,3 +97,7 @@ std::unique_ptr<string_index_bench::v1::Index> make_block_residual_delta_shortdi
     const string_index_bench::v1::Parameters& p) {
   return variant(p, blocklearn::Verification::residual, true, true, true);
 }
+std::unique_ptr<string_index_bench::v1::Index> make_block_residual_delta_shortdir_first_cost(
+    const string_index_bench::v1::Parameters& p) { return make_cost_residual(p); }
+std::unique_ptr<string_index_bench::v1::Index> make_block_adaptive_delta_shortdir_first(
+    const string_index_bench::v1::Parameters& p) { return make_adaptive(p); }

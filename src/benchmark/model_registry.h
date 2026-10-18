@@ -9,8 +9,8 @@ struct ModelFactory {
   string_index_bench::v1::Factory factory;
   bool control;
 };
-inline const std::array<ModelFactory, 10>& model_factories() {
-  static const std::array<ModelFactory, 10> models{{
+inline const std::array<ModelFactory, 12>& model_factories() {
+  static const std::array<ModelFactory, 12> models{{
       {"block-plain", make_block_plain, true},
       {"block-hash", make_block_hash, true},
       {"block-residual", make_block_residual, true},
@@ -20,7 +20,9 @@ inline const std::array<ModelFactory, 10>& model_factories() {
       {"block-hash-shortdir-first", make_block_hash_shortdir_first, false},
       {"block-residual-delta-shortdir", make_block_residual_delta_shortdir, false},
       {"block-residual-delta-first", make_block_residual_delta_first, false},
-      {"block-residual-delta-shortdir-first", make_block_residual_delta_shortdir_first, false}}};
+      {"block-residual-delta-shortdir-first", make_block_residual_delta_shortdir_first, false},
+      {"block-residual-delta-shortdir-first-cost", make_block_residual_delta_shortdir_first_cost, false},
+      {"block-adaptive-delta-shortdir-first", make_block_adaptive_delta_shortdir_first, false}}};
   return models;
 }
 inline bool is_model_ablation(std::string_view id) {

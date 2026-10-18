@@ -18,15 +18,21 @@ LearnedIndex::LearnedIndex(Options options) : options_(options) {
     throw std::invalid_argument("invalid learned-index configuration");
   if (options.predicted_first && options.verification == Verification::full_key)
     throw std::invalid_argument("predicted_first requires tag verification");
+  if ((options.verification == Verification::adaptive && !options.workload_planner) ||
+      (options.workload_planner && options.verification == Verification::full_key))
+    throw std::invalid_argument("adaptive tags require the work planner; full-key binary search uses the legacy planner");
+  if (options.cost_weights) options.cost_weights->validate();
 }
 Descriptor LearnedIndex::descriptor() const {
   Descriptor d;
-  d.implementation = options_.verification == Verification::full_key ? "block-plain"
+  d.implementation = options_.verification == Verification::adaptive ? "block-adaptive-delta"
+      : options_.verification == Verification::full_key ? "block-plain"
       : options_.verification == Verification::hash ? "block-hash"
       : options_.allow_insert ? "block-residual-delta" : "block-residual";
   if (options_.short_directory) d.implementation += "-shortdir";
   if (options_.predicted_first) d.implementation += "-first";
-  d.implementation_version = "blocklearn-prototype-v2";
+  if (options_.workload_planner && options_.verification != Verification::adaptive) d.implementation += "-cost";
+  d.implementation_version = "blocklearn-prototype-v3";
   d.adapter_version = "string-index-v1-2026-10";
   auto& c = d.capabilities;
   c.bulk_load = c.find = c.scan = c.range_sum = Support::native;
@@ -36,7 +42,13 @@ Descriptor LearnedIndex::descriptor() const {
       "32-bit record IDs limit total records to UINT32_MAX.";
   d.adaptation_notes += std::string(" Short-directory routing=") +
       (options_.short_directory ? "on" : "off") + "; predicted-block-first=" +
-      (options_.predicted_first ? "on." : "off.");
+      (options_.verification == Verification::adaptive && options_.predicted_first
+          ? "allowed-per-region." : options_.predicted_first ? "on." : "off.");
+  d.adaptation_notes += options_.workload_planner
+      ? " Calibrated actual-batch/early-return planning; cost profile required at bulk_load; no benchmark queries used."
+      : " Original legacy planner retained as control.";
+  if (options_.verification == Verification::adaptive)
+    d.adaptation_notes += " Per-region hash/residual tags and allowed probe order chosen on held-out stored-key samples.";
   return d;
 }
 void LearnedIndex::require_loaded() const {
@@ -56,7 +68,50 @@ std::string_view LearnedIndex::first_key(const Node& n) const {
 }
 std::uint16_t LearnedIndex::tag(const Node& n, std::string_view key) const {
   return options_.verification == Verification::hash
+      || (options_.verification == Verification::adaptive && n.tag_kind == TagKind::hash)
       ? hash_tag(key, n.model.prefix_size()) : n.tag_plan.tag(key);
+}
+void LearnedIndex::train_work_leaf(Node& n, const std::vector<std::string_view>& keys, bool reuse) {
+  if (!n.delta.empty()) throw std::logic_error("cannot reconfigure tags with unmerged delta");
+  const auto& weights = *options_.cost_weights;
+  RegionPlanningOptions settings;
+  settings.max_segments = options_.max_segments; settings.max_block_error = options_.max_block_error;
+  settings.max_features = options_.tag_features;
+  settings.allow_hash = options_.verification != Verification::residual;
+  settings.allow_residual = options_.verification != Verification::hash;
+  settings.predicted_first = options_.predicted_first;
+  settings.choose_order = options_.verification == Verification::adaptive;
+  RegionPlan plan;
+  bool refitted = false;
+  if (reuse && n.model.certified() && n.model.segment_count()) {
+    auto model = BlockModel::fit(keys, n.model.block_size(), n.model.encoding_bytes(),
+                                 n.model.segment_count(), options_.max_block_error);
+    if (model.certified()) {
+      TagStrategy strategy; strategy.kind = n.tag_kind; strategy.learned = n.tag_plan;
+      strategy.predicted_first = n.predicted_first;
+      const auto score = evaluate_query_work(keys, model, strategy, weights, planning_samples(keys, true));
+      ++n.merges_since_features;
+      if (n.merges_since_features < 8 && score.cost <= n.planning_cost * 1.25)
+        plan = {std::move(model), strategy, score};
+      else {
+        plan = plan_model(keys, model, weights, settings);
+        n.merges_since_features = 0;
+      }
+      refitted = true;
+    }
+  }
+  if (!refitted) {
+    plan = plan_region(keys, weights, settings);
+    n.merges_since_features = 0;
+  }
+  n.model = std::move(plan.model); n.tag_plan = plan.strategy.learned;
+  n.tag_kind = plan.strategy.kind; n.predicted_first = plan.strategy.predicted_first;
+  n.planning_cost = plan.evaluation.cost;
+  n.tags.clear();
+  if (n.model.certified()) {
+    n.tags.reserve(keys.size());
+    for (auto key : keys) n.tags.push_back(tag(n, key));
+  }
 }
 void LearnedIndex::train_leaf(Node& n, bool reuse_features) {
   ++counters_.regions_trained;
@@ -64,6 +119,7 @@ void LearnedIndex::train_leaf(Node& n, bool reuse_features) {
   keys.reserve(n.ids.size());
   for (auto id : n.ids) keys.push_back(row(id).key);
   if (keys.empty()) { n.model = BlockModel(); n.tags.clear(); return; }
+  if (options_.workload_planner) { train_work_leaf(n, keys, reuse_features); return; }
   // Normal merges do not need a fresh grid search. Refit the existing small
   // model and re-certify every base key. Periodically audit feature quality;
   // exactness does not depend on collision rate or on this heuristic schedule.
@@ -104,7 +160,7 @@ void LearnedIndex::train_leaf(Node& n, bool reuse_features) {
     return;  // caller splits difficult regions; exact binary fallback is safe
   }
   std::stable_sort(candidates.begin(), candidates.end(), [&](const auto& a, const auto& b) {
-    return a.planning_cost(keys.size()) < b.planning_cost(keys.size());
+    return a.legacy_planning_cost(keys.size()) < b.legacy_planning_cost(keys.size());
   });
   double best_cost = std::numeric_limits<double>::infinity();
   BlockModel best_model;
@@ -118,7 +174,7 @@ void LearnedIndex::train_leaf(Node& n, bool reuse_features) {
       if (plan.candidate_matches > 3)
         plan = learn_tags(keys, candidates[i], options_.tag_features);
     }
-    const auto cost = candidates[i].planning_cost(keys.size()) + plan.cost;
+    const auto cost = candidates[i].legacy_planning_cost(keys.size()) + plan.cost;
     if (cost < best_cost) {
       best_cost = cost; best_model = candidates[i]; best_tags = plan;
     }
@@ -140,8 +196,8 @@ void LearnedIndex::train_directory(Node& n) {
   for (unsigned bytes : {2U, 4U, 7U})
     for (std::size_t s = 1; s <= options_.max_segments; s *= 2) {
       auto m = BlockModel::fit(n.fences, 1, bytes, s, 2);
-      if (m.certified() && m.planning_cost(n.fences.size()) < cost) {
-        cost = m.planning_cost(n.fences.size()); best = std::move(m);
+      if (m.certified() && m.legacy_planning_cost(n.fences.size()) < cost) {
+        cost = m.legacy_planning_cost(n.fences.size()); best = std::move(m);
       }
     }
   n.model = std::move(best);  // uncertified empty model => exact ordered directory
@@ -170,6 +226,8 @@ void LearnedIndex::bulk_load(const std::vector<Row>& rows) {
   for (std::size_t i = 1; i < rows.size(); ++i)
     if (!less(rows[i - 1].key, rows[i].key))
       throw std::invalid_argument("bulk rows must be strictly byte-sorted and unique");
+  if (options_.workload_planner && !options_.cost_weights)
+    options_.cost_weights = environment_cost_profile().weights;
   input_ = &rows;
   std::vector<std::unique_ptr<Node>> level;
   for (std::size_t begin = 0; begin < rows.size(); begin += options_.region_size) {
@@ -300,7 +358,7 @@ std::optional<LearnedIndex::Value> LearnedIndex::find_leaf_traced(
       {
         typename Trace::Scope filtering(trace, LookupStage::tag_filter);
         const auto count = std::min<std::size_t>(16, end - i);
-        if (options_.instrument) counters_.tag_tests += count;
+        if (options_.instrument) { counters_.tag_tests += count; ++counters_.tag_batches; }
         mask = tag_mask(n.tags.data() + i, count, fingerprint);
       }
       while (mask) {
@@ -312,7 +370,7 @@ std::optional<LearnedIndex::Value> LearnedIndex::find_leaf_traced(
     }
     return std::nullopt;
   };
-  if (options_.predicted_first) {
+  if (options_.workload_planner ? n.predicted_first : options_.predicted_first) {
     const auto end = std::min(n.ids.size(), predicted + n.model.block_size());
     if (auto value = probe(predicted, end)) return value;
     if (auto value = probe(lo, predicted)) return value;
@@ -457,7 +515,15 @@ Statistics LearnedIndex::statistics() const {
   auto s = counters_;
   auto visit = [&](auto&& self, const Node& n, std::size_t depth) -> void {
     s.height = std::max(s.height, depth);
-    if (n.leaf) { ++s.leaves; s.delta_rows += n.delta.size(); }
+    if (n.leaf) {
+      ++s.leaves; s.delta_rows += n.delta.size();
+      if (n.model.certified() && !n.ids.empty() && options_.verification != Verification::full_key) {
+        if (options_.verification == Verification::hash ||
+            (options_.verification == Verification::adaptive && n.tag_kind == TagKind::hash)) ++s.hash_leaves;
+        else ++s.residual_leaves;
+        if (options_.workload_planner ? n.predicted_first : options_.predicted_first) ++s.predicted_first_leaves;
+      }
+    }
     else { ++s.directory_nodes; for (const auto& c : n.children) self(self, *c, depth + 1); }
   };
   if (root_) visit(visit, *root_, 1);
@@ -481,6 +547,8 @@ void LearnedIndex::validate() const {
       return;
     }
     leaves.push_back(&n);
+    if (options_.workload_planner && n.predicted_first && !options_.predicted_first)
+      throw std::logic_error("region enabled a disallowed probe order");
     if (n.model.certified()) for (std::size_t i = 0; i < n.ids.size(); ++i) {
       const auto w = n.model.window(row(n.ids[i]).key);
       if (i / n.model.block_size() < w.first || i / n.model.block_size() >= w.last)

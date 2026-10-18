@@ -5,5 +5,5 @@
   "cmake_target": "blocklearn_adapter",
   "factory_header": "benchmark/factories.h",
   "factory_symbol": "make_block_hash_shortdir_first",
-  "source_identity": "blocklearn-prototype-v2-source-uncommitted"
+  "source_identity": "blocklearn-prototype-v3-source-uncommitted"
 }

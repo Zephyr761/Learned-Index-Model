@@ -13,13 +13,17 @@ from types import SimpleNamespace
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src/experiments"))
 from stage_profile import file_sha256, profile_static
-from run_experiments import ABLATION_IDS
+from run_experiments import ABLATION_IDS, PLANNER_IDS
 
 
 def main():
     binary = sys.argv[1]
     with tempfile.TemporaryDirectory(prefix="blocklearn-profile-") as folder:
         folder = Path(folder)
+        costs = folder / "costs.txt"
+        subprocess.run([sys.argv[2], "--output", str(costs), "--iterations", "1024"], check=True, stdout=subprocess.PIPE)
+        environment = os.environ.copy()
+        environment["BLOCKLEARN_COST_PROFILE"] = str(costs)
         rows = folder / "rows.bin"
         queries = folder / "queries.bin"
         keys = [b"", b"a", b"a\0b", b"https://example/001", b"https://example/002", b"\xff"]
@@ -36,14 +40,14 @@ def main():
         def invoke(name, samples=13, ok=True):
             result = subprocess.run([binary, "--rows", str(rows), "--queries", str(queries),
                 "--implementation", name, "--samples", str(samples), "--repeats", "2"],
-                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=environment)
             assert (result.returncode == 0) == ok, result.stdout + result.stderr
             return list(csv.DictReader(io.StringIO(result.stdout))) if ok else []
 
         write_queries(workload)
         positions = [i * len(workload) // 13 for i in range(13)]
         checksum = sum(workload[i][2] + workload[i][1] for i in positions) % (1 << 64)
-        for name in ("block-plain", "block-hash", "block-residual", "block-residual-delta") + ABLATION_IDS:
+        for name in ("block-plain", "block-hash", "block-residual", "block-residual-delta") + ABLATION_IDS + PLANNER_IDS:
             result = invoke(name)
             assert all(None not in row and all(v is not None for v in row.values()) for row in result)
             for repeat in ("0", "1"):

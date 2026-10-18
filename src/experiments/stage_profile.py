@@ -65,6 +65,7 @@ def profile_static(args, output, build, env, metadata, static_report, run):
              "每阶段结果按全部重复的累计时间 / 累计抽样查询数汇总；all/hit/miss 的每轮原始值见 stage-profile.csv。", "",
              "| 实现 | 阶段 | 原始 ns/查询 | 原始总时间占比 | 计时作用域次数/查询 |", "| --- | --- | ---: | ---: | ---: |"]
     clock_notes = []
+    region_notes = []
     for name in metadata["implementations"]:
         group = [r for r in results if r["implementation"] == name and r["outcome"] == "all"]
         totals = [r for r in group if r["stage"] == "profiled_total"]
@@ -80,10 +81,14 @@ def profile_static(args, output, build, env, metadata, static_report, run):
             share = "{:.1f}%".format(100 * ns / total_ns) if total_ns else "不可用"
             lines.append("| {} | {} | {:.2f} | {} | {:.3f} |".format(name, title, ns / count, share, calls / count))
         clock = totals[0]
+        if clock.get("hash_leaves") is not None:
+            region_notes.append("{}：已认证区域 hash={}，residual={}，预测块优先={}；实际标签批次数/查询={:.3f}。".format(
+                name, clock["hash_leaves"], clock["residual_leaves"], clock["predicted_first_leaves"],
+                sum(int(r["tag_batches"]) for r in totals) / count))
         clock_notes.append("{}：每轮抽样 {} 条；空读钟间隔中位数 {:.2f} ns，P90 {:.2f} ns，零间隔 {:.1f}%。".format(
             name, clock["sampled_queries"], float(clock["clock_pair_median_ns"]),
             float(clock["clock_pair_p90_ns"]), 100 * float(clock["clock_pair_zero_fraction"])))
-    lines += ["", *clock_notes, "", "未插入时 delta_scan 不执行，这是预期结果；混合读写中的合并/重训并未在此细分。",
+    lines += ["", *region_notes, "", *clock_notes, "", "未插入时 delta_scan 不执行，这是预期结果；混合读写中的合并/重训并未在此细分。",
               "ART/HOT 未改动源码，不伪造其内部阶段；与基线比较请查看 static/report.md。", ""]
     for item in skipped:
         lines.append("- {}: {}".format(item["implementation"], item["reason"]))
