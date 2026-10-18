@@ -3,12 +3,15 @@
 #include <array>
 #include <deque>
 #include <cstdlib>
+#include <cstring>
 
 #ifdef BLOCKLEARN_NATIVE_HOT
 #if defined(__APPLE__)
 #define __bswap_64 __builtin_bswap64
 #define __bswap_32 __builtin_bswap32
 #define __bswap_16 __builtin_bswap16
+#else
+#include <byteswap.h>
 #endif
 #include <hot/singlethreaded/HOTSingleThreaded.hpp>
 #include <idx/contenthelpers/PairPointerKeyExtractor.hpp>
@@ -30,22 +33,25 @@ class HotIndex final : public Index {
   void ready() const { if (!loaded_) throw std::logic_error("bulk_load required"); }
   static std::array<char, 256> query(std::string_view key) {
     cstring_key(key, 254);
-    std::array<char, 256> k{};
+    // Only provide a bounded C string here. HOT's own toFixSizedKey performs
+    // the full zero-padding; doing it twice would add avoidable wrapper cost.
+    std::array<char, 256> k;
     if (!key.empty()) std::memcpy(k.data(), key.data(), key.size());
+    k[key.size()] = '\0';
     return k;
   }
  public:
   Descriptor descriptor() const override {
     Descriptor d; d.implementation = "hot-single-threaded";
     d.implementation_version = "96bf6fb7103b27e50e16a6026db8974c090ee84a";
-    d.adapter_version = "blocklearn-baselines-v1";
+    d.adapter_version = "blocklearn-hot-adapter-v2";
     auto& c = d.capabilities;
     c.keys.allows_nul = false; c.keys.max_bytes = 254;
     c.bulk_load = Support::adapted;
     c.find = c.insert = c.scan = Support::native; c.range_sum = Support::adapted;
     d.adaptation_notes = "Unmodified speedskater/HOT single-threaded C-string trie. "
         "Bulkload uses repeated insert. Explicit 254-byte limit preserves a terminal "
-        "NUL within HOT's 255-byte representation. Bounded query copy and native "
+        "NUL within HOT's 255-byte representation. Bounded query copy/EOS and native "
         "padding costs are timed. Requires x86-64 AVX2/BMI/BMI2/LZCNT/POPCNT. "
         "range_sum is native lower_bound + iteration.";
     return d;
@@ -84,7 +90,7 @@ class HotIndex final : public Index {
     return result;
   }
   Value range_sum(std::string_view lower, std::string_view upper) const override {
-    ready(); cstring_key(upper, 254);
+    ready(); cstring_key(lower, 254); cstring_key(upper, 254);
     if (blocklearn::less(upper, lower)) return 0;
     auto k = query(lower); const char* pointer = k.data();
     Value total = 0;
@@ -110,7 +116,7 @@ class HotIndex final : public Index {
   Descriptor descriptor() const override {
     Descriptor d; d.implementation = "hot-single-threaded-unavailable";
     d.implementation_version = "96bf6fb7103b27e50e16a6026db8974c090ee84a";
-    d.adapter_version = "blocklearn-baselines-v1";
+    d.adapter_version = "blocklearn-hot-adapter-v2";
     d.capabilities.keys.allows_nul = false; d.capabilities.keys.max_bytes = 254;
     d.adaptation_notes = "Native HOT not built: requires GCC, source and x86-64 "
         "AVX2/BMI/BMI2/LZCNT/POPCNT. All operations unsupported. No substitute.";

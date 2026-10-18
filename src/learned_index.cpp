@@ -16,13 +16,17 @@ LearnedIndex::LearnedIndex(Options options) : options_(options) {
       !options.max_segments || options.max_segments > 32 ||
       options.max_block_error > 16 || options.tag_features > 4)
     throw std::invalid_argument("invalid learned-index configuration");
+  if (options.predicted_first && options.verification == Verification::full_key)
+    throw std::invalid_argument("predicted_first requires tag verification");
 }
 Descriptor LearnedIndex::descriptor() const {
   Descriptor d;
   d.implementation = options_.verification == Verification::full_key ? "block-plain"
       : options_.verification == Verification::hash ? "block-hash"
       : options_.allow_insert ? "block-residual-delta" : "block-residual";
-  d.implementation_version = "blocklearn-prototype-v1";
+  if (options_.short_directory) d.implementation += "-shortdir";
+  if (options_.predicted_first) d.implementation += "-first";
+  d.implementation_version = "blocklearn-prototype-v2";
   d.adapter_version = "string-index-v1-2026-10";
   auto& c = d.capabilities;
   c.bulk_load = c.find = c.scan = c.range_sum = Support::native;
@@ -30,6 +34,9 @@ Descriptor LearnedIndex::descriptor() const {
   d.adaptation_notes = "Single-threaded. Borrowed immutable bulk rows, stable owned "
       "insert rows. Exact unsigned-byte semantics. No neural network or hotspot cache. "
       "32-bit record IDs limit total records to UINT32_MAX.";
+  d.adaptation_notes += std::string(" Short-directory routing=") +
+      (options_.short_directory ? "on" : "off") + "; predicted-block-first=" +
+      (options_.predicted_first ? "on." : "off.");
   return d;
 }
 void LearnedIndex::require_loaded() const {
@@ -138,6 +145,7 @@ void LearnedIndex::train_directory(Node& n) {
       }
     }
   n.model = std::move(best);  // uncertified empty model => exact ordered directory
+  if (options_.short_directory) n.short_keys.rebuild(n.fences);
 }
 void LearnedIndex::bulk_leaves(std::vector<Id> ids,
                                std::vector<std::unique_ptr<Node>>& leaves) {
@@ -186,10 +194,20 @@ void LearnedIndex::bulk_load(const std::vector<Row>& rows) {
   loaded_ = true;
 }
 std::size_t LearnedIndex::child_position(const Node& n, std::string_view key) const {
+  NoLookupTrace trace;
+  return child_position_traced(n, key, trace);
+}
+template<class Trace>
+std::size_t LearnedIndex::child_position_traced(const Node& n, std::string_view key,
+                                               Trace& trace) const {
   auto ordered_less = [&](std::string_view a, std::string_view b) {
     if (options_.instrument) ++counters_.full_key_comparisons;
     return less(a, b);
   };
+  if (options_.short_directory) {
+    const auto p = n.short_keys.predecessor(n.fences, key, ordered_less);
+    if (p) return *p;  // optional presence, NOT whether the child index is nonzero
+  }
   auto upper = [&](std::size_t lo, std::size_t hi) {
     return std::size_t(std::upper_bound(n.fences.begin() + lo,
         n.fences.begin() + hi, key,
@@ -205,31 +223,50 @@ std::size_t LearnedIndex::child_position(const Node& n, std::string_view key) co
     if ((p == 0 || !ordered_less(key, n.fences[p])) &&
         (p + 1 == n.fences.size() || ordered_less(key, n.fences[p + 1]))) return p;
   }
+  typename Trace::Scope fallback(trace, LookupStage::exact_fallback);
   if (options_.instrument) ++counters_.directory_fallbacks;
   const auto at = upper(0, n.fences.size());
   return at ? at - 1 : 0;
 }
 const LearnedIndex::Node* LearnedIndex::leaf_for(std::string_view key) const {
+  NoLookupTrace trace;
+  return leaf_for_traced(key, trace);
+}
+template<class Trace>
+const LearnedIndex::Node* LearnedIndex::leaf_for_traced(std::string_view key,
+                                                       Trace& trace) const {
   auto n = root_.get();
-  while (!n->leaf) n = n->children[child_position(*n, key)].get();
+  if (n->leaf) return n;
+  typename Trace::Scope routing(trace, LookupStage::directory_route);
+  while (!n->leaf) n = n->children[child_position_traced(*n, key, trace)].get();
   return n;
 }
-std::optional<LearnedIndex::Value> LearnedIndex::find_leaf(
-    const Node& n, std::string_view key) const {
+template<class Trace>
+std::optional<LearnedIndex::Value> LearnedIndex::find_leaf_traced(
+    const Node& n, std::string_view key, Trace& trace) const {
   const bool filter = options_.verification != Verification::full_key;
-  const auto fingerprint = filter ? tag(n, key) : 0;
+  std::uint16_t fingerprint = 0;
+  if (filter) {
+    typename Trace::Scope generation(trace, LookupStage::tag_generate);
+    fingerprint = tag(n, key);
+  }
   auto matches = [&](Id id) {
+    typename Trace::Scope verification(trace, LookupStage::key_verify);
     if (options_.instrument) ++counters_.full_key_comparisons;
     return row(id).key == key;
   };
   // Delta is checked independently of the old base prefix/model certificate.
   // Newly inserted keys may shorten the common prefix or be out of model range.
-  for (auto d : n.delta) {
-    if (options_.instrument && filter) ++counters_.tag_tests;
-    if ((!filter || d.tag == fingerprint) && matches(d.id)) return row(d.id).value;
+  if (!n.delta.empty()) {
+    typename Trace::Scope delta(trace, LookupStage::delta_scan);
+    for (auto d : n.delta) {
+      if (options_.instrument && filter) ++counters_.tag_tests;
+      if ((!filter || d.tag == fingerprint) && matches(d.id)) return row(d.id).value;
+    }
   }
   if (n.ids.empty()) return std::nullopt;
   if (!n.model.certified()) {
+    typename Trace::Scope fallback(trace, LookupStage::exact_fallback);
     auto it = std::lower_bound(n.ids.begin(), n.ids.end(), key,
         [&](Id id, std::string_view k) {
           if (options_.instrument) ++counters_.full_key_comparisons;
@@ -238,11 +275,17 @@ std::optional<LearnedIndex::Value> LearnedIndex::find_leaf(
     return it != n.ids.end() && matches(*it)
         ? std::optional<Value>(row(*it).value) : std::nullopt;
   }
-  if (!n.model.accepts_prefix(key)) return std::nullopt;
-  const auto w = n.model.window(key);
-  const auto lo = w.first * n.model.block_size();
-  const auto hi = std::min(n.ids.size(), w.last * n.model.block_size());
+  std::size_t lo, hi, predicted;
+  {
+    typename Trace::Scope prediction(trace, LookupStage::leaf_model);
+    if (!n.model.accepts_prefix(key)) return std::nullopt;
+    const auto location = n.model.locate(key);
+    lo = location.window.first * n.model.block_size();
+    hi = std::min(n.ids.size(), location.window.last * n.model.block_size());
+    predicted = location.predicted * n.model.block_size();
+  }
   if (!filter) {
+    typename Trace::Scope verification(trace, LookupStage::key_verify);
     auto it = std::lower_bound(n.ids.begin() + lo, n.ids.begin() + hi, key,
         [&](Id id, std::string_view k) {
           if (options_.instrument) ++counters_.full_key_comparisons;
@@ -251,23 +294,47 @@ std::optional<LearnedIndex::Value> LearnedIndex::find_leaf(
     return it != n.ids.begin() + hi && matches(*it)
         ? std::optional<Value>(row(*it).value) : std::nullopt;
   }
-  for (auto i = lo; i < hi; i += 16) {
-    const auto count = std::min<std::size_t>(16, hi - i);
-    if (options_.instrument) counters_.tag_tests += count;
-    auto mask = tag_mask(n.tags.data() + i, count, fingerprint);
-    while (mask) {
-      const auto lane = unsigned(__builtin_ctz(mask));
-      const auto id = n.ids[i + lane];
-      if (matches(id)) return row(id).value;
-      mask &= mask - 1;
+  auto probe = [&](std::size_t begin, std::size_t end) -> std::optional<Value> {
+    for (auto i = begin; i < end; i += 16) {
+      std::uint32_t mask;
+      {
+        typename Trace::Scope filtering(trace, LookupStage::tag_filter);
+        const auto count = std::min<std::size_t>(16, end - i);
+        if (options_.instrument) counters_.tag_tests += count;
+        mask = tag_mask(n.tags.data() + i, count, fingerprint);
+      }
+      while (mask) {
+        const auto lane = unsigned(__builtin_ctz(mask));
+        const auto id = n.ids[i + lane];
+        if (matches(id)) return row(id).value;
+        mask &= mask - 1;
+      }
     }
+    return std::nullopt;
+  };
+  if (options_.predicted_first) {
+    const auto end = std::min(n.ids.size(), predicted + n.model.block_size());
+    if (auto value = probe(predicted, end)) return value;
+    if (auto value = probe(lo, predicted)) return value;
+    return probe(end, hi);
   }
-  return std::nullopt;
+  return probe(lo, hi);
 }
 std::optional<LearnedIndex::Value> LearnedIndex::find(std::string_view key) const {
+  NoLookupTrace trace;
+  return lookup_traced(key, trace);
+}
+std::optional<LearnedIndex::Value> LearnedIndex::profile_find(
+    std::string_view key, LookupProfile& profile) const {
+  TimedLookupTrace trace(profile);
+  return lookup_traced(key, trace);
+}
+template<class Trace>
+std::optional<LearnedIndex::Value> LearnedIndex::lookup_traced(std::string_view key,
+                                                            Trace& trace) const {
   require_loaded();
   if (options_.instrument) ++counters_.queries;
-  return find_leaf(*leaf_for(key), key);
+  return find_leaf_traced(*leaf_for_traced(key, trace), key, trace);
 }
 std::vector<LearnedIndex::Id> LearnedIndex::ordered_ids(const Node& n) const {
   auto result = n.ids;
@@ -364,7 +431,8 @@ std::size_t LearnedIndex::node_bytes(const Node& n) const {
       + n.tags.capacity() * sizeof(std::uint16_t)
       + n.delta.capacity() * sizeof(DeltaEntry)
       + n.children.capacity() * sizeof(std::unique_ptr<Node>)
-      + n.fences.capacity() * sizeof(std::string_view) + n.model.owned_bytes();
+      + n.fences.capacity() * sizeof(std::string_view) + n.model.owned_bytes()
+      + n.short_keys.owned_bytes();
   for (const auto& child : n.children) bytes += node_bytes(*child);
   return bytes;
 }
@@ -403,6 +471,8 @@ void LearnedIndex::validate() const {
     if (!n.leaf) {
       if (n.children.size() != n.fences.size() || n.children.empty())
         throw std::logic_error("bad directory sizes");
+      if (options_.short_directory && !n.short_keys.valid_for(n.fences))
+        throw std::logic_error("stale short directory codes/prefix");
       for (std::size_t i = 0; i < n.children.size(); ++i) {
         if (n.fences[i] != first_key(*n.children[i])) throw std::logic_error("stale fence");
         if (i && !less(n.fences[i - 1], n.fences[i])) throw std::logic_error("unordered fences");

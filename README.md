@@ -38,6 +38,8 @@
 
 四个消融版本和真实 ART/HOT 的 v1 工厂、manifest、静态/混合评测入口均在 `src`。构建和运行见 [实验说明](src/experiments/README.md)，完整机制与正确性论证见 [设计复核](src/DESIGN.md)。尚未证明在真实数据上超过 ART/HOT。
 
+迁移到 x86 Linux 后，先运行 `python3 -B tools/prepare_linux_hot.py` 强制验收原生 HOT，再做正式比较。环境准备、源码版本和静态/读写命令见 [Linux HOT 接口验收](docs/LINUX_HOT.md)。
+
 ## 模型方案
 
 当前方案直接训练局部 `key 编码 -> 块编号`，并根据预测候选集合学习用于验证的字节位置；不使用全局 HPT 来假定某个局部后缀的真实条件 CDF。

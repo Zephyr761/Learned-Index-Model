@@ -16,10 +16,24 @@ import platform
 import shutil
 import subprocess
 import sys
+from stage_profile import profile_static
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFESTS = Path(__file__).resolve().parent
-IDS = ("block-plain", "block-hash", "block-residual", "block-residual-delta", "art", "hot")
+DEFAULT_IDS = ("block-plain", "block-hash", "block-residual", "block-residual-delta", "art", "hot")
+ABLATION_SUFFIXES = {"directory": "-shortdir", "probe": "-first", "both": "-shortdir-first"}
+ABLATION_FAMILIES = ("block-hash", "block-residual-delta")
+ABLATION_IDS = tuple(name + suffix for name in ABLATION_FAMILIES for suffix in ABLATION_SUFFIXES.values())
+IDS = DEFAULT_IDS + ABLATION_IDS
+
+
+def expand_ablations(implementations, ablation):
+    result = []
+    for name in implementations:
+        result.append(name)
+        if ablation and name in ABLATION_FAMILIES:
+            result.append(name + ABLATION_SUFFIXES[ablation])
+    return result
 
 
 def positive(text):
@@ -74,6 +88,8 @@ def main():
     parser.add_argument("--benchmark", type=Path, default=ROOT / "benchmark/learned-index")
     parser.add_argument("--mode", choices=("static", "mixed", "both"), default="static")
     parser.add_argument("--implementation", action="append", choices=IDS)
+    parser.add_argument("--ablation", choices=tuple(ABLATION_SUFFIXES),
+                        help="pair selected block-hash / block-residual-delta controls with directory-only, probe-only, or combined variants")
     parser.add_argument("--operations", type=positive, default=1000000)
     parser.add_argument("--repeats", type=positive, default=3)
     parser.add_argument("--seed", type=int, default=42)
@@ -82,6 +98,8 @@ def main():
     parser.add_argument("--initial-fraction", type=fraction, default=.8)
     parser.add_argument("--latency-samples", type=positive, default=10000)
     parser.add_argument("--latency-every", type=positive, default=1024)
+    parser.add_argument("--profile-stages", action="store_true", help="separate diagnostic query pass, never used for QPS; requires static/both mode")
+    parser.add_argument("--profile-samples", type=positive, default=10000)
     parser.add_argument("--memory-budget-mib", type=positive, default=1024)
     parser.add_argument("--timeout", type=positive, default=1800)
     parser.add_argument("--jobs", type=int, choices=(1, 2, 3, 4), default=2)
@@ -90,12 +108,20 @@ def main():
     args = parser.parse_args()
     if args.seed < 0 or args.seed > (1 << 64) - 1 or args.initial_fraction == 0:
         parser.error("seed must fit uint64; initial-fraction must be >0")
+    if args.profile_stages and args.mode == "mixed":
+        parser.error("--profile-stages currently profiles static queries; use --mode static or both")
     benchmark = args.benchmark.resolve()
     if not (benchmark / "scripts/benchmark.py").is_file():
         parser.error("--benchmark is not the teammate's repository")
-    implementations = args.implementation or list(IDS)
+    implementations = args.implementation or list(DEFAULT_IDS)
     if len(set(implementations)) != len(implementations):
         parser.error("duplicate implementation")
+    if args.ablation:
+        if any(name in ABLATION_IDS for name in implementations):
+            parser.error("--ablation selects variants automatically; select base implementation IDs")
+        if not any(name in ABLATION_FAMILIES for name in implementations):
+            parser.error("--ablation requires selecting block-hash or block-residual-delta")
+        implementations = expand_ablations(implementations, args.ablation)
     if args.require_hot and "hot" not in implementations:
         parser.error("--require-hot requires selecting hot")
     env = os.environ.copy()
@@ -117,6 +143,8 @@ def main():
         "art_revision": git_revision(ROOT / "related_works/libart"),
         "hot_revision": git_revision(ROOT / "related_works/hot"),
         "implementations": implementations, "arguments": {k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
+        "optimization_variants": {name: {"short_directory": "-shortdir" in name,
+            "predicted_first": name.endswith("-first")} for name in implementations if name.startswith("block-")},
         "limitations": ["No automatic CPU pinning or prewarm; control the test environment.",
                         "Reported owned memory is an estimate, not peak RSS.",
                         "E3 and E4 have identical static lookup paths before inserts.",
@@ -130,7 +158,8 @@ def main():
         if args.require_hot:
             configure.append("-DBLOCKLEARN_REQUIRE_HOT=ON")
         run(configure, env, args.timeout, output / "configure.log")
-        run([cmake, "--build", build, "--target", "blocklearn_mixed", "-j", args.jobs],
+        targets = ["blocklearn_mixed"] + (["blocklearn_profile"] if args.profile_stages else [])
+        run([cmake, "--build", build, "--target", *targets, "-j", args.jobs],
             env, args.timeout, output / "build.log")
         description = run([build / "src/blocklearn_mixed", "--describe"], env, args.timeout,
                           output / "availability.csv")
@@ -158,6 +187,8 @@ def main():
                                                for r in static_report["results"]]
                 if args.require_hot and any(r["status"] != "passed" for r in static_report["results"]):
                     raise RuntimeError("required baseline comparison did not pass on the full workload")
+                if args.profile_stages:
+                    profile_static(args, output, build, env, metadata, static_report, run)
         if args.mode in ("mixed", "both"):
             sys.path.insert(0, str(benchmark / "scripts"))
             from benchmark_lib.dataset import prepare_dataset
@@ -203,6 +234,8 @@ def main():
         lines += ["", "Static results: static/report.md (only available implementations).",
                   "Mixed results: mixed-summary.csv. Full provenance: suite.json.", "",
                   "E3/E4 static paths are identical; this is not proof of speedup or novelty."]
+        if "stage_profile" in metadata:
+            lines += ["", "Separate diagnostic stages: stage-profile.md / stage-profile.csv (instrumented times, NOT throughput)."]
         (output / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
     print("Results:", output)
 

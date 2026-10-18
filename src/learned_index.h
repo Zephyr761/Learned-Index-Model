@@ -6,6 +6,8 @@
 #include <new>
 #include "block_model.h"
 #include "residual_tags.h"
+#include "lookup_profile.h"
+#include "short_directory.h"
 
 namespace blocklearn {
 
@@ -14,6 +16,8 @@ struct Options {
   Verification verification = Verification::residual;
   bool allow_insert = true;
   bool instrument = false;
+  bool short_directory = false;
+  bool predicted_first = false;
   std::size_t region_size = 1024;
   std::size_t directory_fanout = 64;
   std::size_t delta_capacity = 16;
@@ -51,6 +55,8 @@ class LearnedIndex final : public string_index_bench::v1::Index {
   string_index_bench::v1::Descriptor descriptor() const override;
   void bulk_load(const std::vector<Row>& rows) override;
   std::optional<Value> find(std::string_view key) const override;
+  // Same algorithm as find, separately instantiated with diagnostic timers.
+  std::optional<Value> profile_find(std::string_view key, LookupProfile&) const;
   string_index_bench::v1::InsertResult insert(std::string_view key, Value value) override;
   string_index_bench::v1::UpdateResult update(std::string_view, Value) override;
   string_index_bench::v1::EraseResult erase(std::string_view) override;
@@ -71,6 +77,7 @@ class LearnedIndex final : public string_index_bench::v1::Index {
     std::vector<DeltaEntry> delta;
     std::vector<std::unique_ptr<Node>> children;
     std::vector<std::string_view> fences;
+    ShortDirectory short_keys;
     BlockModel model;
     TagPlan tag_plan;
     std::size_t merges_since_features = 0;
@@ -92,7 +99,10 @@ class LearnedIndex final : public string_index_bench::v1::Index {
   void bulk_leaves(std::vector<Id>, std::vector<std::unique_ptr<Node>>&);
   std::size_t child_position(const Node&, std::string_view) const;
   const Node* leaf_for(std::string_view) const;
-  std::optional<Value> find_leaf(const Node&, std::string_view) const;
+  template<class Trace> std::size_t child_position_traced(const Node&, std::string_view, Trace&) const;
+  template<class Trace> const Node* leaf_for_traced(std::string_view, Trace&) const;
+  template<class Trace> std::optional<Value> find_leaf_traced(const Node&, std::string_view, Trace&) const;
+  template<class Trace> std::optional<Value> lookup_traced(std::string_view, Trace&) const;
   std::unique_ptr<Node> insert_into(Node&, Id);
   std::vector<Id> ordered_ids(const Node&) const;
   std::size_t node_bytes(const Node&) const;

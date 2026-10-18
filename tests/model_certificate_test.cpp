@@ -38,6 +38,10 @@ int main() {
           // its cost/error budget is unsuitable for the fast path.
           for (std::size_t i = 0; i < keys.size(); ++i) {
             const auto w = model.window(keys[i]);
+            const auto location = model.locate(keys[i]);
+            check(location.window.first == w.first && location.window.last == w.last &&
+                  w.first <= location.predicted && location.predicted < w.last,
+                  "predicted block/window disagree");
             check(w.first <= i / block && i / block < w.last, "bad model certificate");
           }
         }

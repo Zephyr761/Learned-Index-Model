@@ -1,6 +1,7 @@
 // Companion to the teammate's static runner. Same v1 interface and SIBROW1
 // interchange, but a frozen mixed workload with local maintenance timed.
 #include "factories.h"
+#include "model_registry.h"
 #include "learned_index.h"
 #include "key_bytes.h"
 #include <algorithm>
@@ -127,10 +128,11 @@ static std::string quoted(std::string text) {
 }
 int main(int argc, char** argv) {
   try {
-    const std::vector<std::pair<std::string, Factory>> implementations{
-      {"block-plain", make_block_plain}, {"block-hash", make_block_hash},
-      {"block-residual", make_block_residual}, {"block-residual-delta", make_block_residual_delta},
-      {"art", make_art_baseline}, {"hot", make_hot_baseline}};
+    std::vector<std::pair<std::string, Factory>> implementations;
+    for (const auto& model : blocklearn::bench::model_factories())
+      implementations.emplace_back(model.id, model.factory);
+    implementations.emplace_back("art", make_art_baseline);
+    implementations.emplace_back("hot", make_hot_baseline);
     if (argc == 2 && std::string_view(argv[1]) == "--describe") {
       std::cout << "implementation,status,notes\n";
       for (const auto& implementation : implementations) {
@@ -145,7 +147,7 @@ int main(int argc, char** argv) {
     for (int i = 1; i < argc; ++i) {
       std::string name = argv[i];
       if (name == "--help") {
-        std::cout << "--rows SIBROW1-file [--implementation all|block-plain|block-hash|block-residual|block-residual-delta|art|hot] "
+        std::cout << "--rows SIBROW1-file [--implementation all|MODEL-ID|art|hot] (model IDs include -shortdir/-first/-shortdir-first ablations; all keeps original six) "
           "[--operations 100000 --repeats 3 --seed 42 --initial-fraction .8 --insert-ratio .05 --miss-ratio .1 --latency-every 1024]\n";
         return 0;
       }
@@ -183,6 +185,7 @@ int main(int argc, char** argv) {
       const auto& name = implementation.first;
       const auto factory = implementation.second;
       if (s.implementation != "all" && s.implementation != name) continue;
+      if (s.implementation == "all" && blocklearn::bench::is_model_ablation(name)) continue;
       auto emit_status = [&](const std::string& status, const std::string& reason) {
         std::cout << name << ',' << status << ",," << w.initial.size() << ',' << rows.size()
           << ',' << w.operations.size() << ',' << w.reads << ',' << w.inserts << ',' << w.miss_reads;

@@ -11,6 +11,10 @@ struct BlockWindow {
   std::size_t first = 0;  // inclusive block index
   std::size_t last = 0;   // exclusive block index
 };
+struct BlockPrediction {
+  BlockWindow window;
+  std::size_t predicted = 0;
+};
 
 class BlockModel {
  public:
@@ -23,6 +27,7 @@ class BlockModel {
                         std::size_t block_size, unsigned bytes,
                         std::size_t segments, std::size_t max_error);
   BlockWindow window(std::string_view key) const;
+  BlockPrediction locate(std::string_view key) const;
   bool accepts_prefix(std::string_view key) const;
   bool certified() const { return certified_; }
   std::size_t block_size() const { return block_size_; }

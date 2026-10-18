@@ -1,0 +1,23 @@
+cmake_minimum_required(VERSION 3.16)
+project(BlockLearnNativeHotAcceptance LANGUAGES C CXX)
+
+if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux" OR
+   NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+  message(FATAL_ERROR "HOT acceptance requires native x86-64 Linux, not ARM/emulation")
+endif()
+if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+  message(FATAL_ERROR "HOT acceptance requires GCC/g++; configure with gcc and g++")
+endif()
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
+set(BLOCKLEARN_REQUIRE_HOT ON CACHE BOOL "Require the real native HOT adapter" FORCE)
+
+include(CTest)
+add_subdirectory("${CMAKE_CURRENT_LIST_DIR}/../../src" adapters)
+add_executable(hot_native_contract_test "${CMAKE_CURRENT_LIST_DIR}/../hot_native_contract_test.cpp")
+target_link_libraries(hot_native_contract_test PRIVATE hot_baseline)
+add_test(NAME hot_native_contract COMMAND hot_native_contract_test)
+add_executable(baseline_contract_test "${CMAKE_CURRENT_LIST_DIR}/../baseline_contract_test.cpp")
+target_link_libraries(baseline_contract_test PRIVATE art_baseline hot_baseline)
+add_test(NAME baseline_contract COMMAND baseline_contract_test)

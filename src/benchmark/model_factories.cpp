@@ -22,9 +22,21 @@ blocklearn::Options parse(const string_index_bench::v1::Parameters& params,
     else if (name == "max_block_error") o.max_block_error = value;
     else if (name == "tag_features" && value <= 4) o.tag_features = unsigned(value);
     else if (name == "instrument" && value <= 1) o.instrument = value != 0;
+    else if (name == "short_directory" && value <= 1) o.short_directory = value != 0;
+    else if (name == "predicted_first" && value <= 1) o.predicted_first = value != 0;
     else throw std::invalid_argument("unknown/invalid parameter: " + name);
   }
   return o;
+}
+std::unique_ptr<string_index_bench::v1::Index> variant(
+    const string_index_bench::v1::Parameters& params,
+    blocklearn::Verification verification, bool insert, bool shortdir, bool first) {
+  auto options = parse(params, verification, insert);
+  for (const auto& parameter : params)
+    if (parameter.first == "short_directory" || parameter.first == "predicted_first")
+      throw std::invalid_argument("ablation factory fixes optimization switches");
+  options.short_directory = shortdir; options.predicted_first = first;
+  return std::make_unique<blocklearn::LearnedIndex>(options);
 }
 }
 std::unique_ptr<string_index_bench::v1::Index> make_block_plain(
@@ -42,4 +54,28 @@ std::unique_ptr<string_index_bench::v1::Index> make_block_residual(
 std::unique_ptr<string_index_bench::v1::Index> make_block_residual_delta(
     const string_index_bench::v1::Parameters& p) {
   return std::make_unique<blocklearn::LearnedIndex>(parse(p, blocklearn::Verification::residual, true));
+}
+std::unique_ptr<string_index_bench::v1::Index> make_block_hash_shortdir(
+    const string_index_bench::v1::Parameters& p) {
+  return variant(p, blocklearn::Verification::hash, false, true, false);
+}
+std::unique_ptr<string_index_bench::v1::Index> make_block_hash_first(
+    const string_index_bench::v1::Parameters& p) {
+  return variant(p, blocklearn::Verification::hash, false, false, true);
+}
+std::unique_ptr<string_index_bench::v1::Index> make_block_hash_shortdir_first(
+    const string_index_bench::v1::Parameters& p) {
+  return variant(p, blocklearn::Verification::hash, false, true, true);
+}
+std::unique_ptr<string_index_bench::v1::Index> make_block_residual_delta_shortdir(
+    const string_index_bench::v1::Parameters& p) {
+  return variant(p, blocklearn::Verification::residual, true, true, false);
+}
+std::unique_ptr<string_index_bench::v1::Index> make_block_residual_delta_first(
+    const string_index_bench::v1::Parameters& p) {
+  return variant(p, blocklearn::Verification::residual, true, false, true);
+}
+std::unique_ptr<string_index_bench::v1::Index> make_block_residual_delta_shortdir_first(
+    const string_index_bench::v1::Parameters& p) {
+  return variant(p, blocklearn::Verification::residual, true, true, true);
 }

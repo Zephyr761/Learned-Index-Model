@@ -74,12 +74,15 @@ bool BlockModel::accepts_prefix(std::string_view key) const {
   return key.size() >= prefix_.size() && key.substr(0, prefix_.size()) == prefix_;
 }
 BlockWindow BlockModel::window(std::string_view key) const {
+  return locate(key).window;
+}
+BlockPrediction BlockModel::locate(std::string_view key) const {
   if (!blocks_ || segments_.empty()) return {};
   const auto x = encode(key, prefix_.size(), bytes_);
   const auto& s = segment(x);
   const auto p = predict(s, x);
-  return {p > s.radius ? p - s.radius : 0,
-          std::min(blocks_, p + s.radius + 1)};
+  return {{p > s.radius ? p - s.radius : 0,
+           std::min(blocks_, p + s.radius + 1)}, p};
 }
 std::size_t BlockModel::owned_bytes() const {
   return segments_.capacity() * sizeof(Segment);
